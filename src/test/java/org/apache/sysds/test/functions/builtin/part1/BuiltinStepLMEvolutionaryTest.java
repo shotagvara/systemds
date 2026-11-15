@@ -19,6 +19,7 @@
 
 package org.apache.sysds.test.functions.builtin.part1;
 
+import org.apache.sysds.runtime.matrix.data.MatrixValue.CellIndex;
 import org.apache.sysds.runtime.meta.MatrixCharacteristics;
 import org.apache.sysds.test.AutomatedTestBase;
 import org.apache.sysds.test.TestConfiguration;
@@ -39,6 +40,15 @@ public class BuiltinStepLMEvolutionaryTest extends AutomatedTestBase {
 
 	@Test
 	public void testStepLMEvolutionary() {
+		runStepLMEvolutionary(10, new double[]{1, 2, 5, 6, 8, 11});
+	}
+
+	@Test
+	public void testStepLMEvolutionarySingleFeature() {
+		runStepLMEvolutionary(1, new double[]{1, 2});
+	}
+
+	private void runStepLMEvolutionary(int cols, double[] expected) {
 		loadTestConfiguration(getTestConfiguration(TEST_NAME));
 		fullDMLScriptName = SCRIPT_DIR + TEST_DIR + TEST_NAME + ".dml";
 
@@ -47,7 +57,6 @@ public class BuiltinStepLMEvolutionaryTest extends AutomatedTestBase {
 		};
 
 		int rows = 100;
-		int cols = 10;
 		double[][] X = getRandomMatrix(rows, cols, 0, 1, 0.8, 42);
 		double[][] y = new double[rows][1];
 
@@ -62,5 +71,15 @@ public class BuiltinStepLMEvolutionaryTest extends AutomatedTestBase {
 		MatrixCharacteristics coefficients = readDMLMetaDataFile("B");
 		Assert.assertEquals(cols + 1, coefficients.getRows());
 		Assert.assertEquals(1, coefficients.getCols());
+
+		MatrixCharacteristics selection = readDMLMetaDataFile("S");
+		Assert.assertEquals(1, selection.getRows());
+		Assert.assertEquals(expected.length, selection.getCols());
+
+		var selected = readDMLMatrixFromOutputDir("S");
+		for (int i = 0; i < expected.length; i++) {
+			double actual = selected.getOrDefault(new CellIndex(1, i + 1), Double.NaN);
+			Assert.assertEquals("S[1, " + (i + 1) + "]", expected[i], actual, 0.0);
+		}
 	}
 }

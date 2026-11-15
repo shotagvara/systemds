@@ -92,90 +92,109 @@ m_steplmevolutionary = function(Matrix[Double] X, Matrix[Double] y, Integer icpt
   boa_ncol = ncol(X_orig) + as.integer(icpt!=0);
   beta_out_all = matrix(0, boa_ncol, m_orig);
 
+            num_features = ncol(X_orig);
+
+            mask_13 = matrix(0, rows=1, cols=num_features);
+            mask_13[1, 1] = 1;
+
+            mask_23 = matrix(0, rows=1, cols=num_features);
+            mask_23[1, min(2, num_features)] = 1;
+
+            if (num_features >= 3) {
+              mask_13[1, 3] = 1;
+              mask_23[1, 3] = 1;
+            }
+
+            population = rbind(mask_13, mask_23);
+        best_candidate_aic = Inf;
+
+        for (generation in 1:3) {
+          print("Generation " + generation);
+
+          child_1 = population[1, ];
+          child_2 = population[2, ];
+
+          bit_1 = 1 + ((generation + 1) %% ncol(X_orig));
+          bit_2 = 1 + ((generation - 1) %% ncol(X_orig));
+
+          child_1[1, bit_1] = 1 - child_1[1, bit_1];
+          child_2[1, bit_2] = 1 - child_2[1, bit_2];
+
+          candidates = rbind(rbind(population, child_1), child_2);
+
+          best_candidate = 1;
+          best_candidate_aic = Inf;
+          candidate_scores = matrix(0, rows=1, cols=nrow(candidates));
+
+          for (candidate in 1:nrow(candidates)) {
+            mask = candidates[candidate, ];
+            aic_candidate = Inf;
+
+            if (sum(mask) > 0) {
+              X_candidate = removeEmpty(target=X_orig, margin="cols", select=mask);
+              [aic_candidate, beta_candidate] = linear_regression(
+                X_candidate, y, icpt, reg, tol, maxi, verbose);
+            }
+
+            candidate_scores[1, candidate] = aic_candidate;
+            if (aic_candidate < best_candidate_aic) {
+              best_candidate_aic = aic_candidate;
+              best_candidate = candidate;
+            }
+
+            print("Candidate " + candidate + ": AIC = " + aic_candidate);
+          }
+
+          remaining_scores = candidate_scores;
+          remaining_scores[1, best_candidate] = Inf;
+          second_candidate = as.scalar(rowIndexMin(remaining_scores));
+
+          next_population = rbind(candidates[best_candidate, ],
+                                  candidates[second_candidate, ]);
+          print("Selected for next generation: " + best_candidate + ", " + second_candidate);
+
+          population = next_population;
+        }
+
+        best_mask = population[1, ];
+        print("Best AIC after 3 generations: " + best_candidate_aic);
+
+        for (feature in 1:ncol(X_orig)) {
+          mutated_mask = best_mask;
+          mutated_mask[1, feature] = 1 - mutated_mask[1, feature];
+
+          if (sum(mutated_mask) > 0) {
+            X_mutated = removeEmpty(target=X_orig, margin="cols", select=mutated_mask);
+            [aic_mutated, beta_mutated] = linear_regression(
+              X_mutated, y, icpt, reg, tol, maxi, verbose);
+
+            if (aic_mutated < best_candidate_aic) {
+              best_mask = mutated_mask;
+              best_candidate_aic = aic_mutated;
+              print("Accepted flip at feature " + feature + ": AIC = " + aic_mutated);
+            }
+          }
+        }
+        print("Best AIC after mutation pass: " + best_candidate_aic);
+
+        feature_ids = t(seq(1, ncol(X_orig), 1));
+        evolutionary_S = removeEmpty(target=feature_ids, margin="cols", select=best_mask);
+        print("Evolutionary selected features:");
+        print(evolutionary_S);
+
+
   # First pass to examine single features
-  AICs = matrix(0, 1, m_orig);
-  parfor (i in 1:m_orig) {
-    [AIC_1, beta_out_i] = linear_regression(X_orig[, i], y, icpt, reg, tol, maxi, verbose);
-    AICs[1, i] = AIC_1;
-    beta_out_all[1:nrow(beta_out_i), i] = beta_out_i;
-  }
-  AIC_best = min(min(AICs), AIC_best_orig);
-  AIC_check = checkAIC(AIC_best, AIC_best_orig, thr);
-  column_best = ifelse(AIC_check, as.scalar(rowIndexMin(AICs)), 0);
+     X_final = removeEmpty(target=X_orig, margin="cols", select=best_mask);
+     [final_aic, final_beta] = linear_regression(
+       X_final, y, icpt, reg, tol, maxi, verbose);
 
-  # beta best so far
-  beta_best = beta_out_all[, column_best];
-  if (column_best == 0) {
-    if(verbose)
-      print("AIC of an empty model is " + AIC_best + " and adding no feature achieves more than " + (thr * 100) + "% decrease in AIC!");
-    B = matrix(0, m_orig, 1);
-    if (icpt != 0)
-      B = rbind(B, as.matrix(beta));
-    S = matrix(0, 1, 1);
-  }
-  else {
-    if(verbose)
-      print("Best AIC " + AIC_best + " achieved with feature: " + column_best);
+     S = evolutionary_S;
+     if (icpt != 0) {
+       S = cbind(S, matrix(boa_ncol, 1, 1));
+     }
 
-    columns_fixed[1, column_best] = 1;
-    columns_fixed_ordered[1, 1] = column_best;
-    X_global = X_orig[, column_best];
-
-    continue = TRUE
-    while (continue) {
-      # Subsequent passes over the features
-      beta_out_all_2 = matrix(0, boa_ncol, m_orig * 1);
-      AICs_2 = matrix(0, 1, m_orig); # full overwrite
-      parfor (i in 1:m_orig) {
-        if (as.scalar(columns_fixed[1, i]) == 0) {
-          # Construct the feature matrix
-          Xi = cbind(X_global, X_orig[, i]);
-          [AIC_2, beta_out_i2] = linear_regression(Xi, y, icpt, reg, tol, maxi, verbose);
-          AICs_2[1, i] = AIC_2;
-          beta_out_all_2[1:nrow(beta_out_i2), i] = beta_out_i2;
-        }
-        else {
-          AICs_2[1,i] = Inf;
-        }
-      }
-
-      # Determine the best AIC
-      AIC_best_orig = AIC_best;
-      AIC_best = min(min(AICs_2), AIC_best_orig);
-      AIC_check = checkAIC(AIC_best, AIC_best_orig, thr);
-      column_best = ifelse(AIC_check, as.scalar(rowIndexMin(AICs_2)), column_best);
-
-      # have the best beta store in the matrix
-      beta_best = beta_out_all_2[, column_best];
-
-      # Append best found features (i.e., columns) to X_global
-      if (as.scalar(columns_fixed[1, column_best]) == 0) {
-        # new best feature found
-        if(verbose)
-          print("Best AIC " + AIC_best + " achieved with feature: " + column_best);
-        columns_fixed[1, column_best] = 1;
-        columns_fixed_ordered = cbind(columns_fixed_ordered, as.matrix(column_best));
-        if (ncol(columns_fixed_ordered) == m_orig) {
-          # all features examined
-          X_global = cbind(X_global, X_orig[, column_best]);
-          continue = FALSE;
-        } else {
-          X_global = cbind(X_global, X_orig[, column_best]);
-        }
-      } else {
-        continue = FALSE;
-      }
-    }
-    # run linear regression with selected set of features
-    if( verbose )
-      print("Running linear regression with selected features...");
-    [AIC, beta_out] = linear_regression(X_global, y, icpt, reg, tol, maxi, verbose);
-    S = columns_fixed_ordered;
-    if (icpt != 0)
-      S = cbind(S, matrix(boa_ncol, 1, 1))
-    B = reorder_matrix(boa_ncol, beta_out, S);
-  }
-}
+     B = reorder_matrix(boa_ncol, final_beta, S);
+ }
 
 # Computes linear regression using lm and outputs AIC.
 linear_regression = function(Matrix[Double] X, Matrix[Double] y, Integer icpt,
