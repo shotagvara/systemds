@@ -81,5 +81,54 @@ public class BuiltinStepLMEvolutionaryTest extends AutomatedTestBase {
 			double actual = selected.getOrDefault(new CellIndex(1, i + 1), Double.NaN);
 			Assert.assertEquals("S[1, " + (i + 1) + "]", expected[i], actual, 0.0);
 		}
+		// Read and validate the regression coefficients.
+		var coefficientsData = readDMLMatrixFromOutputDir("B");
+		double[] beta = new double[cols + 1];
+
+		for (int j = 0; j <= cols; j++) {
+			beta[j] = coefficientsData.getOrDefault(new CellIndex(j + 1, 1), 0.0);
+			Assert.assertTrue("Coefficient must be finite: " + (j + 1),
+					Double.isFinite(beta[j]));
+		}
+
+// Features excluded from S must have zero coefficients.
+		for (int j = 0; j < cols; j++) {
+			boolean isSelected = false;
+			for (double feature : expected) {
+				if (feature == j + 1) {
+					isSelected = true;
+					break;
+				}
+			}
+			if (!isSelected) {
+				Assert.assertEquals("Excluded feature: " + (j + 1),
+						0.0, beta[j], 0.0);
+			}
+		}
+
+// Compare predictions with the baseline that always predicts mean(y).
+		double meanY = 0.0;
+		for (int i = 0; i < rows; i++) {
+			meanY += y[i][0];
+		}
+		meanY /= rows;
+
+		double modelError = 0.0;
+		double baselineError = 0.0;
+
+		for (int i = 0; i < rows; i++) {
+			double prediction = beta[cols]; // Intercept.
+			for (int j = 0; j < cols; j++) {
+				prediction += X[i][j] * beta[j];
+			}
+
+			double residual = y[i][0] - prediction;
+			double baselineResidual = y[i][0] - meanY;
+			modelError += residual * residual;
+			baselineError += baselineResidual * baselineResidual;
+		}
+
+		Assert.assertTrue("Model must improve on the mean-only baseline",
+				modelError < baselineError);
 	}
 }
