@@ -19,10 +19,12 @@
 #
 #-------------------------------------------------------------
 
-# The steplm-function (stepwise linear regression) implements a classical forward feature selection method.
-# This method iteratively runs what-if scenarios and greedily selects the next best feature
-# until the Akaike information criterion (AIC) does not improve anymore. Each configuration trains a regression model
-# via lm, which in turn calls either the closed form lmDS or iterative lmGC.
+# Evolutionary feature selection for linear regression.
+# Start with two random nonempty feature masks.
+# Each generation creates two offspring by flipping one random bit per parent.
+# Evaluate parents and offspring using AIC and retain the two best candidates.
+# Finally, apply one greedy bit-flip improvement pass and fit the selected model.
+# The seed parameter makes the random search reproducible.
 #
 # .. code-block:: 
 #
@@ -67,22 +69,15 @@ m_steplmevolutionary = function(Matrix[Double] X, Matrix[Double] y, Integer icpt
   if( icpt!=0 & icpt!=1 & icpt!=2 )
     stop("Invalid steplm invocation with icpt="+icpt+" (valid values: 0,1,2).");
 
-  # NOTE: currently only the forward selection strategy in supported:
-  # start from one feature and iteratively add features until AIC improves
-  thr = 0.001;
+
 
   if(verbose)
-    print("BEGIN STEPWISE LINEAR REGRESSION SCRIPT");
+    print("BEGIN EVOLUTIONARY FEATURE SELECTION");
   X_orig = X;
   n = nrow(X_orig);
   m_orig = ncol(X_orig);
 
-  # BEGIN STEPWISE LINEAR REGRESSION
-  columns_fixed = matrix(0, 1, m_orig);
-  columns_fixed_ordered = matrix(0, 1, 1);
 
-  # X_global stores the best model found at each step
-  X_global = matrix(0, n, 1);
 
   if (icpt == 1 | icpt == 2) {
     beta = mean(y);
@@ -94,7 +89,6 @@ m_steplmevolutionary = function(Matrix[Double] X, Matrix[Double] y, Integer icpt
   if(verbose)
     print("Best AIC without any features: " + AIC_best_orig);
   boa_ncol = ncol(X_orig) + as.integer(icpt!=0);
-  beta_out_all = matrix(0, boa_ncol, m_orig);
 
             num_features = ncol(X_orig);
 
@@ -118,11 +112,13 @@ m_steplmevolutionary = function(Matrix[Double] X, Matrix[Double] y, Integer icpt
           rows=generations, cols=2, min=0, max=1,
           sparsity=1.0, seed=seed);
 
-        for (generation in 1:generations) {
-          print("Generation " + generation);
+        feature_positions = t(seq(1, num_features, 1));
 
-          child_1 = population[1, ];
-          child_2 = population[2, ];
+        for (generation in 1:generations) {
+           if (verbose) {
+              print("Generation " + generation);
+           }
+
 
           bit_1 = min(num_features, 1 + as.integer(floor(
             as.scalar(mutation_draws[generation, 1]) * num_features)));
@@ -130,8 +126,8 @@ m_steplmevolutionary = function(Matrix[Double] X, Matrix[Double] y, Integer icpt
           bit_2 = min(num_features, 1 + as.integer(floor(
             as.scalar(mutation_draws[generation, 2]) * num_features)));
 
-          child_1[1, bit_1] = 1 - child_1[1, bit_1];
-          child_2[1, bit_2] = 1 - child_2[1, bit_2];
+          child_1 = abs(population[1, ] - (feature_positions == bit_1));
+          child_2 = abs(population[2, ] - (feature_positions == bit_2));
 
           candidates = rbind(rbind(population, child_1), child_2);
 
@@ -155,7 +151,9 @@ m_steplmevolutionary = function(Matrix[Double] X, Matrix[Double] y, Integer icpt
               best_candidate = candidate;
             }
 
-            print("Candidate " + candidate + ": AIC = " + aic_candidate);
+            if (verbose) {
+              print("Candidate " + candidate + ": AIC = " + aic_candidate);
+            }
           }
 
           remaining_scores = candidate_scores;
@@ -164,17 +162,20 @@ m_steplmevolutionary = function(Matrix[Double] X, Matrix[Double] y, Integer icpt
 
           next_population = rbind(candidates[best_candidate, ],
                                   candidates[second_candidate, ]);
-          print("Selected for next generation: " + best_candidate + ", " + second_candidate);
+          if (verbose) {
+                print("Selected for next generation: " + best_candidate + ", " + second_candidate);
+          }
 
           population = next_population;
         }
 
         best_mask = population[1, ];
-        print("Best AIC after " + generations + " generations: " + best_candidate_aic);
+        if (verbose) {
+                print("Best AIC after " + generations + " generations: " + best_candidate_aic);
+            }
 
         for (feature in 1:ncol(X_orig)) {
-          mutated_mask = best_mask;
-          mutated_mask[1, feature] = 1 - mutated_mask[1, feature];
+          mutated_mask = abs(best_mask - (feature_positions == feature));
 
           if (sum(mutated_mask) > 0) {
             X_mutated = removeEmpty(target=X_orig, margin="cols", select=mutated_mask);
@@ -184,19 +185,37 @@ m_steplmevolutionary = function(Matrix[Double] X, Matrix[Double] y, Integer icpt
             if (aic_mutated < best_candidate_aic) {
               best_mask = mutated_mask;
               best_candidate_aic = aic_mutated;
-              print("Accepted flip at feature " + feature + ": AIC = " + aic_mutated);
+              if (verbose) {
+                    print("Accepted flip at feature " + feature + ": AIC = " + aic_mutated);
+              }
             }
           }
         }
-        print("Best AIC after mutation pass: " + best_candidate_aic);
 
-        feature_ids = t(seq(1, ncol(X_orig), 1));
-        evolutionary_S = removeEmpty(target=feature_ids, margin="cols", select=best_mask);
-        print("Evolutionary selected features:");
-        print(evolutionary_S);
+        if (verbose) {
+                    print("Best AIC after mutation pass: " + best_candidate_aic);
+                }
+
+        # Build the list of selected feature indices explicitly.
+        selected_count = as.integer(sum(best_mask));
+        evolutionary_S = matrix(0, rows=1, cols=selected_count);
+
+        position = 1;
+        for (feature in 1:num_features) {
+          if (as.scalar(best_mask[1, feature]) == 1) {
+            evolutionary_S[1, position] = feature;
+            position = position + 1;
+          }
+        }
+
+        if (verbose) {
+                print("Evolutionary selected features:");
+                print(evolutionary_S);
+        }
 
 
-  # First pass to examine single features
+  # Fit the final model using the selected features.
+
      X_final = removeEmpty(target=X_orig, margin="cols", select=best_mask);
      [final_aic, final_beta] = linear_regression(
        X_final, y, icpt, reg, tol, maxi, verbose);
@@ -253,7 +272,4 @@ reorder_matrix = function(
   Y = t(P) %*% B;
 }
 
-checkAIC = function(Double AIC_cur, Double AIC_best, Double thr) return (Boolean R) {
-  R = (AIC_cur < AIC_best) & (AIC_best-AIC_cur > abs(thr * AIC_best))
-}
 
