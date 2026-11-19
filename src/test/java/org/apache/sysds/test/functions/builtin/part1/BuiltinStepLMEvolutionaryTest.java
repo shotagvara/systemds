@@ -48,7 +48,19 @@ public class BuiltinStepLMEvolutionaryTest extends AutomatedTestBase {
 		runStepLMEvolutionary(1, new double[]{1, 2});
 	}
 
-	private void runStepLMEvolutionary(int cols, double[] expected) {
+	@Test
+	public void testStepLMEvolutionaryReproducibility() {
+		double[] expected = {1, 2, 5, 6, 8, 11};
+
+		double[] first = runStepLMEvolutionary(10, expected);
+		double[] second = runStepLMEvolutionary(10, expected);
+
+		Assert.assertArrayEquals(
+				"Same data and seed must produce identical coefficients",
+				first, second, 0.0);
+	}
+
+	private double[] runStepLMEvolutionary(int cols, double[] expected) {
 		loadTestConfiguration(getTestConfiguration(TEST_NAME));
 		fullDMLScriptName = SCRIPT_DIR + TEST_DIR + TEST_NAME + ".dml";
 
@@ -130,5 +142,6 @@ public class BuiltinStepLMEvolutionaryTest extends AutomatedTestBase {
 
 		Assert.assertTrue("Model must improve on the mean-only baseline",
 				modelError < baselineError);
+		return beta;
 	}
 }
